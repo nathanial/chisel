@@ -3,28 +3,13 @@
 -/
 import Chisel
 import Crucible
+import Staple
 
 namespace Tests.DML
 
 open Crucible
 open Chisel
-
-/-- Check if a string contains a substring -/
-def containsSubstr (haystack needle : String) : Bool :=
-  if needle.isEmpty then true
-  else
-    let haystackLen := haystack.length
-    let needleLen := needle.length
-    if needleLen > haystackLen then false
-    else
-      let rec loop (i : Nat) (fuel : Nat) : Bool :=
-        match fuel with
-        | 0 => false
-        | fuel' + 1 =>
-          if i + needleLen > haystackLen then false
-          else if (haystack.drop i |>.take needleLen) == needle then true
-          else loop (i + 1) fuel'
-      loop 0 (haystackLen + 1)
+open Staple (String.containsSubstr)
 
 testSuite "Chisel DML"
 
@@ -36,9 +21,9 @@ test "simple insert renders correctly" := do
     |>.values [str "Alice", str "alice@example.com"]
     |>.build
   let sql := renderInsert {} stmt
-  ensure (containsSubstr sql "INSERT INTO users") "should have INSERT INTO"
-  ensure (containsSubstr sql "(name, email)") "should have columns"
-  ensure (containsSubstr sql "VALUES") "should have VALUES"
+  ensure (String.containsSubstr sql "INSERT INTO users") "should have INSERT INTO"
+  ensure (String.containsSubstr sql "(name, email)") "should have columns"
+  ensure (String.containsSubstr sql "VALUES") "should have VALUES"
 
 test "insert multiple rows" := do
   let stmt := insertInto "users"
@@ -47,8 +32,8 @@ test "insert multiple rows" := do
     |>.values [str "Bob"]
     |>.build
   let sql := renderInsert {} stmt
-  ensure (containsSubstr sql "'Alice'") "should have Alice"
-  ensure (containsSubstr sql "'Bob'") "should have Bob"
+  ensure (String.containsSubstr sql "'Alice'") "should have Alice"
+  ensure (String.containsSubstr sql "'Bob'") "should have Bob"
 
 test "insert or ignore" := do
   let stmt := insertInto "users"
@@ -57,7 +42,7 @@ test "insert or ignore" := do
     |>.values [str "Alice"]
     |>.build
   let sql := renderInsert {} stmt
-  ensure (containsSubstr sql "OR IGNORE") "should have OR IGNORE"
+  ensure (String.containsSubstr sql "OR IGNORE") "should have OR IGNORE"
 
 test "insert or replace" := do
   let stmt := insertInto "users"
@@ -66,7 +51,7 @@ test "insert or replace" := do
     |>.values [str "Alice"]
     |>.build
   let sql := renderInsert {} stmt
-  ensure (containsSubstr sql "OR REPLACE") "should have OR REPLACE"
+  ensure (String.containsSubstr sql "OR REPLACE") "should have OR REPLACE"
 
 test "insert with returning" := do
   let stmt := insertInto "users"
@@ -75,7 +60,7 @@ test "insert with returning" := do
     |>.returningAll
     |>.build
   let sql := renderInsert {} stmt
-  ensure (containsSubstr sql "RETURNING *") "should have RETURNING *"
+  ensure (String.containsSubstr sql "RETURNING *") "should have RETURNING *"
 
 -- UPDATE tests
 
@@ -85,9 +70,9 @@ test "simple update renders correctly" := do
     |>.where_ (col "id" .== val 1)
     |>.build
   let sql := renderUpdate {} stmt
-  ensure (containsSubstr sql "UPDATE users SET") "should have UPDATE SET"
-  ensure (containsSubstr sql "name = 'Alice'") "should have assignment"
-  ensure (containsSubstr sql "WHERE") "should have WHERE"
+  ensure (String.containsSubstr sql "UPDATE users SET") "should have UPDATE SET"
+  ensure (String.containsSubstr sql "name = 'Alice'") "should have assignment"
+  ensure (String.containsSubstr sql "WHERE") "should have WHERE"
 
 test "update multiple columns" := do
   let stmt := update "users"
@@ -96,8 +81,8 @@ test "update multiple columns" := do
     |>.where_ (col "id" .== val 1)
     |>.build
   let sql := renderUpdate {} stmt
-  ensure (containsSubstr sql "name = 'Alice'") "should have name"
-  ensure (containsSubstr sql "age = 30") "should have age"
+  ensure (String.containsSubstr sql "name = 'Alice'") "should have name"
+  ensure (String.containsSubstr sql "age = 30") "should have age"
 
 test "update with returning" := do
   let stmt := update "users"
@@ -106,7 +91,7 @@ test "update with returning" := do
     |>.returningAll
     |>.build
   let sql := renderUpdate {} stmt
-  ensure (containsSubstr sql "RETURNING *") "should have RETURNING"
+  ensure (String.containsSubstr sql "RETURNING *") "should have RETURNING"
 
 -- DELETE tests
 
@@ -115,8 +100,8 @@ test "simple delete renders correctly" := do
     |>.where_ (col "id" .== val 1)
     |>.build
   let sql := renderDelete {} stmt
-  ensure (containsSubstr sql "DELETE FROM users") "should have DELETE FROM"
-  ensure (containsSubstr sql "WHERE") "should have WHERE"
+  ensure (String.containsSubstr sql "DELETE FROM users") "should have DELETE FROM"
+  ensure (String.containsSubstr sql "WHERE") "should have WHERE"
 
 test "delete all rows" := do
   let stmt := deleteFrom "temp_data"
@@ -129,7 +114,7 @@ test "delete with returning" := do
     |>.returningAll
     |>.build
   let sql := renderDelete {} stmt
-  ensure (containsSubstr sql "RETURNING *") "should have RETURNING"
+  ensure (String.containsSubstr sql "RETURNING *") "should have RETURNING"
 
 #generate_tests
 

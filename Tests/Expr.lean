@@ -3,28 +3,13 @@
 -/
 import Chisel
 import Crucible
+import Staple
 
 namespace Tests.Expr
 
 open Crucible
 open Chisel
-
-/-- Check if a string contains a substring -/
-def containsSubstr (haystack needle : String) : Bool :=
-  if needle.isEmpty then true
-  else
-    let haystackLen := haystack.length
-    let needleLen := needle.length
-    if needleLen > haystackLen then false
-    else
-      let rec loop (i : Nat) (fuel : Nat) : Bool :=
-        match fuel with
-        | 0 => false
-        | fuel' + 1 =>
-          if i + needleLen > haystackLen then false
-          else if (haystack.drop i |>.take needleLen) == needle then true
-          else loop (i + 1) fuel'
-      loop 0 (haystackLen + 1)
+open Staple (String.containsSubstr)
 
 testSuite "Chisel Expressions"
 

@@ -5,6 +5,7 @@ package chisel where
   version := v!"0.1.0"
 
 require crucible from ".." / "crucible"
+require staple from ".." / "staple"
 
 @[default_target]
 lean_lib Chisel where
