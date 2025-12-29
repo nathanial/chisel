@@ -14,7 +14,7 @@ A type-safe SQL DSL for Lean 4 that generates SQL strings with compile-time vali
 Add to your `lakefile.lean`:
 
 ```lean
-require chisel from ".." / "chisel"
+require chisel from git "https://github.com/nathanial/chisel" @ "v0.0.1"
 ```
 
 ## Usage
