@@ -8,7 +8,7 @@ namespace Chisel
 
 /-- SELECT builder state -/
 structure SelectState where
-  stmt : SelectStmt := {}
+  stmt : SelectStmt := SelectCore.empty
   deriving Inhabited
 
 /-- SELECT builder monad -/
@@ -18,20 +18,19 @@ namespace SelectM
 
 /-- Build SELECT statement from monadic builder -/
 def build (m : SelectM Unit) : SelectStmt :=
-  let (_, state) := m.run {}
+  let (_, state) := m.run { stmt := SelectCore.empty }
   state.stmt
 
 /-- Build SELECT statement, returning the final state -/
 def buildWith (m : SelectM α) : α × SelectStmt :=
-  let (a, state) := m.run {}
+  let (a, state) := m.run { stmt := SelectCore.empty }
   (a, state.stmt)
 
 end SelectM
 
 /-- Add column to SELECT clause -/
 def select_ (e : Expr) (alias_ : Option String := none) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    columns := s.stmt.columns ++ [{ expr := e, alias_ }] }}
+  modify fun s => { s with stmt := s.stmt.setColumns (s.stmt.columns ++ [SelectItem.mk e alias_]) }
 
 /-- SELECT * -/
 def selectAll : SelectM Unit :=
@@ -43,38 +42,37 @@ def selectTableStar (table : String) : SelectM Unit :=
 
 /-- Mark SELECT as DISTINCT -/
 def distinct : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with distinct := true }}
+  modify fun s => { s with stmt := s.stmt.setDistinct true }
 
 /-- Set FROM table -/
 def from_ (table : String) (alias_ : Option String := none) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    from_ := some (.table table alias_) }}
+  modify fun s => { s with stmt := s.stmt.setFrom (some (.table table alias_)) }
 
 /-- Add WHERE condition (ANDs with existing) -/
 def where_ (cond : Expr) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    where_ := match s.stmt.where_ with
-      | none => some cond
-      | some existing => some (.binary .and existing cond) }}
+  modify fun s => { s with stmt := s.stmt.setWhere (
+    match s.stmt.where_ with
+    | none => some cond
+    | some existing => some (.binary .and existing cond)) }
 
 /-- Set WHERE condition (replaces existing) -/
 def whereReplace (cond : Expr) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with where_ := some cond }}
+  modify fun s => { s with stmt := s.stmt.setWhere (some cond) }
 
 /-- Add OR condition to WHERE -/
 def orWhere (cond : Expr) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    where_ := match s.stmt.where_ with
-      | none => some cond
-      | some existing => some (.binary .or existing cond) }}
+  modify fun s => { s with stmt := s.stmt.setWhere (
+    match s.stmt.where_ with
+    | none => some cond
+    | some existing => some (.binary .or existing cond)) }
 
 /-- Add JOIN -/
 def join_ (type : JoinType) (table : String) (alias_ : Option String := none)
     (on : Option Expr := none) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    from_ := match s.stmt.from_ with
-      | none => some (.table table alias_)
-      | some left => some (.join type left (.table table alias_) on) }}
+  modify fun s => { s with stmt := s.stmt.setFrom (
+    match s.stmt.from_ with
+    | none => some (.table table alias_)
+    | some left => some (.join type left (.table table alias_) on)) }
 
 /-- INNER JOIN shorthand -/
 def innerJoin (table : String) (on : Expr) (alias_ : Option String := none) : SelectM Unit :=
@@ -94,8 +92,7 @@ def crossJoin (table : String) (alias_ : Option String := none) : SelectM Unit :
 
 /-- Add GROUP BY expressions -/
 def groupBy_ (exprs : List Expr) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    groupBy := s.stmt.groupBy ++ exprs }}
+  modify fun s => { s with stmt := s.stmt.setGroupBy (s.stmt.groupBy ++ exprs) }
 
 /-- Add single GROUP BY expression -/
 def groupBy1 (expr : Expr) : SelectM Unit :=
@@ -103,19 +100,18 @@ def groupBy1 (expr : Expr) : SelectM Unit :=
 
 /-- Set HAVING condition -/
 def having_ (cond : Expr) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    having := match s.stmt.having with
-      | none => some cond
-      | some existing => some (.binary .and existing cond) }}
+  modify fun s => { s with stmt := s.stmt.setHaving (
+    match s.stmt.having with
+    | none => some cond
+    | some existing => some (.binary .and existing cond)) }
 
 /-- Add ORDER BY items -/
 def orderBy_ (items : List OrderItem) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with
-    orderBy := s.stmt.orderBy ++ items }}
+  modify fun s => { s with stmt := s.stmt.setOrderBy (s.stmt.orderBy ++ items) }
 
 /-- Add single ORDER BY expression -/
 def orderBy1 (expr : Expr) (dir : SortDir := .asc) (nulls : Option NullsOrder := none) : SelectM Unit :=
-  orderBy_ [{ expr, dir, nulls }]
+  orderBy_ [OrderItem.mk expr dir nulls]
 
 /-- Order by ascending -/
 def orderAsc (expr : Expr) : SelectM Unit :=
@@ -127,11 +123,11 @@ def orderDesc (expr : Expr) : SelectM Unit :=
 
 /-- Set LIMIT -/
 def limit_ (n : Nat) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with limit := some n }}
+  modify fun s => { s with stmt := s.stmt.setLimit (some n) }
 
 /-- Set OFFSET -/
 def offset_ (n : Nat) : SelectM Unit :=
-  modify fun s => { s with stmt := { s.stmt with offset := some n }}
+  modify fun s => { s with stmt := s.stmt.setOffset (some n) }
 
 /-- Set LIMIT and OFFSET together -/
 def paginate (pageSize : Nat) (page : Nat := 0) : SelectM Unit := do

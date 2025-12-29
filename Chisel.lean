@@ -53,3 +53,6 @@ import Chisel.DSL.Expr
 import Chisel.Render.Expr
 import Chisel.Render.DML
 import Chisel.Render.DDL
+
+-- Parser
+import Chisel.Parser

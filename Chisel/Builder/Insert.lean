@@ -51,7 +51,7 @@ def returning (ib : InsertBuilder) (items : List SelectItem) : InsertBuilder :=
 
 /-- Add RETURNING column -/
 def returning1 (ib : InsertBuilder) (expr : Expr) (alias_ : Option String := none) : InsertBuilder :=
-  ib.returning [{ expr, alias_ }]
+  ib.returning [SelectItem.mk expr alias_]
 
 /-- RETURNING * -/
 def returningAll (ib : InsertBuilder) : InsertBuilder :=

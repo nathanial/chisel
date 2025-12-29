@@ -34,7 +34,7 @@ def returning (db : DeleteBuilder) (items : List SelectItem) : DeleteBuilder :=
 
 /-- Add RETURNING column -/
 def returning1 (db : DeleteBuilder) (expr : Expr) (alias_ : Option String := none) : DeleteBuilder :=
-  db.returning [{ expr, alias_ }]
+  db.returning [SelectItem.mk expr alias_]
 
 /-- RETURNING * -/
 def returningAll (db : DeleteBuilder) : DeleteBuilder :=

@@ -51,7 +51,7 @@ def returning (ub : UpdateBuilder) (items : List SelectItem) : UpdateBuilder :=
 
 /-- Add RETURNING column -/
 def returning1 (ub : UpdateBuilder) (expr : Expr) (alias_ : Option String := none) : UpdateBuilder :=
-  ub.returning [{ expr, alias_ }]
+  ub.returning [SelectItem.mk expr alias_]
 
 /-- RETURNING * -/
 def returningAll (ub : UpdateBuilder) : UpdateBuilder :=

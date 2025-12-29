@@ -10,6 +10,6 @@ namespace Chisel
 abbrev SelectStmt := SelectCore
 
 /-- Create an empty SELECT statement -/
-def SelectStmt.empty : SelectStmt := {}
+def SelectStmt.empty : SelectStmt := SelectCore.empty
 
 end Chisel

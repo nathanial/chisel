@@ -91,6 +91,20 @@ partial def renderExpr (ctx : RenderContext) : Expr → String
     let e := renderExpr ctx expr
     let vs := values.map (renderExpr ctx) |> String.intercalate ", "
     s!"({e} NOT IN ({vs}))"
+  | .inSubquery expr subq =>
+    let e := renderExpr ctx expr
+    let sq := renderSelect ctx subq
+    s!"({e} IN ({sq}))"
+  | .notInSubquery expr subq =>
+    let e := renderExpr ctx expr
+    let sq := renderSelect ctx subq
+    s!"({e} NOT IN ({sq}))"
+  | .exists_ subq =>
+    let sq := renderSelect ctx subq
+    s!"EXISTS ({sq})"
+  | .notExists subq =>
+    let sq := renderSelect ctx subq
+    s!"NOT EXISTS ({sq})"
   | .case_ cases else_ =>
     let whenClauses := cases.map fun (cond, result) =>
       s!"WHEN {renderExpr ctx cond} THEN {renderExpr ctx result}"
@@ -118,6 +132,9 @@ partial def renderExpr (ctx : RenderContext) : Expr → String
     | .colon => s!":{name.getD "param"}"
     | .at_ => s!"@{name.getD "param"}"
   | .raw sql => sql
+  | .subquery subq =>
+    let sq := renderSelect ctx subq
+    s!"({sq})"
 
 /-- Render SELECT statement to SQL string -/
 partial def renderSelect (ctx : RenderContext) (stmt : SelectStmt) : String :=
@@ -153,6 +170,9 @@ partial def renderTableRef (ctx : RenderContext) : TableRef → String
       | .cross => "CROSS JOIN"
     let onStr := on.map (fun e => s!" ON {renderExpr ctx e}") |>.getD ""
     s!"{renderTableRef ctx left} {typeStr} {renderTableRef ctx right}{onStr}"
+  | .subquery select alias_ =>
+    let sq := renderSelect ctx select
+    s!"({sq}) AS {quoteIdent alias_}"
 
 /-- Render SELECT item (column with optional alias) -/
 partial def renderSelectItem (ctx : RenderContext) (item : SelectItem) : String :=

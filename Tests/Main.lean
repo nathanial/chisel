@@ -7,6 +7,7 @@ import Tests.Expr
 import Tests.Select
 import Tests.DML
 import Tests.DDL
+import Tests.Parser
 
 open Crucible
 
