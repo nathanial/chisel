@@ -5,7 +5,7 @@ package chisel where
   version := v!"0.1.0"
 
 require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.1"
-require staple from git "https://github.com/nathanial/staple" @ "v0.0.1"
+require staple from git "https://github.com/nathanial/staple" @ "v0.0.2"
 
 @[default_target]
 lean_lib Chisel where
