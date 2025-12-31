@@ -211,6 +211,7 @@ where
     let n1 := hexDigit c1
     let n2 := hexDigit c2
     (n1 * 16 + n2).toUInt8
+  -- TODO: Replace with Staple.Hex.hexCharToNat after staple release
   hexDigit (c : Char) : Nat :=
     if c.isDigit then c.toNat - '0'.toNat
     else if c >= 'a' && c <= 'f' then c.toNat - 'a'.toNat + 10
