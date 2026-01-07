@@ -1,16 +1,38 @@
 /-
   Chisel.Parser
-  SQL parser public API
+  SQL parser public API (using Sift parser combinators)
 -/
+import Sift
 import Chisel.Core.DML
 import Chisel.Core.DDL
-import Chisel.Parser.Core
 import Chisel.Parser.Lexer
 import Chisel.Parser.Param
 
 namespace Chisel.Parser
 
-open Parser Lexer
+-- Open Sift but hide the ambiguous names; use Lexer's versions
+open Sift hiding optional lexeme symbol
+open Lexer
+
+-- Re-export Sift.optional to avoid _root_.optional
+abbrev opt {α : Type} (p : Parser α) := Sift.optional p
+
+-- Helpers that return List instead of Array
+def manyList {α : Type} (p : Parser α) : Parser (List α) := do
+  let arr ← many p
+  pure arr.toList
+
+def many1List {α : Type} (p : Parser α) : Parser (List α) := do
+  let arr ← many1 p
+  pure arr.toList
+
+def sepByList {α β : Type} (p : Parser α) (sep : Parser β) : Parser (List α) := do
+  let arr ← sepBy p sep
+  pure arr.toList
+
+def sepBy1List {α β : Type} (p : Parser α) (sep : Parser β) : Parser (List α) := do
+  let arr ← sepBy1 p sep
+  pure arr.toList
 
 /-!
 ## Expression Parser
@@ -68,8 +90,8 @@ partial def parseParam : Parser Expr := do
 /-- Parse CASE expression -/
 partial def parseCase : Parser Expr := do
   let _ ← keyword "CASE"
-  let cases ← many1 parseWhenClause
-  let else_ ← optional (keyword "ELSE" *> parseExprPrec precOr)
+  let cases ← many1List parseWhenClause
+  let else_ ← opt (keyword "ELSE" *> parseExprPrec precOr)
   let _ ← keyword "END"
   pure (.case_ cases else_)
 where
@@ -93,7 +115,7 @@ partial def parseCast : Parser Expr := do
 /-- Parse function call (after seeing lparen) -/
 partial def parseFuncCall (name : String) : Parser Expr := do
   if isAggFunc name then
-    let distinct ← optional (keyword "DISTINCT")
+    let distinct ← opt (keyword "DISTINCT")
     let upper := name.toUpper
     if upper == "COUNT" then
       let starOrExpr ← (star *> pure none) <|> (parseExprPrec precOr >>= fun e => pure (some e))
@@ -103,7 +125,7 @@ partial def parseFuncCall (name : String) : Parser Expr := do
       | some e => pure (.agg .count (some e) (distinct.isSome))
     else if upper == "GROUP_CONCAT" then
       let e ← parseExprPrec precOr
-      let sep ← optional (comma *> stringLit)
+      let sep ← opt (comma *> stringLit)
       rparen
       pure (.agg (.groupConcat sep) (some e) (distinct.isSome))
     else
@@ -118,7 +140,7 @@ partial def parseFuncCall (name : String) : Parser Expr := do
         | _ => AggFunc.count
       pure (.agg aggFunc (some e) (distinct.isSome))
   else
-    let args ← sepBy (parseExprPrec precOr) comma
+    let args ← sepByList (parseExprPrec precOr) comma
     rparen
     pure (.func name args)
 
@@ -126,23 +148,23 @@ partial def parseFuncCall (name : String) : Parser Expr := do
 partial def parsePrimary : Parser Expr := do
   skipWs
   -- Subquery: (SELECT ...)
-  (tryP do
+  (attempt do
     lparen
     let sel ← parseSelectCore
     rparen
     pure (.subquery sel))
   -- Parenthesized expression
-  <|> (tryP do
+  <|> (attempt do
     lparen
     let e ← parseExprPrec precOr
     rparen
     pure e)
   -- CASE expression
-  <|> (tryP parseCase)
+  <|> (attempt parseCase)
   -- CAST expression
-  <|> (tryP parseCast)
+  <|> (attempt parseCast)
   -- NOT EXISTS
-  <|> (tryP do
+  <|> (attempt do
     let _ ← keyword "NOT"
     let _ ← keyword "EXISTS"
     lparen
@@ -150,32 +172,32 @@ partial def parsePrimary : Parser Expr := do
     rparen
     pure (.notExists sel))
   -- EXISTS
-  <|> (tryP do
+  <|> (attempt do
     let _ ← keyword "EXISTS"
     lparen
     let sel ← parseSelectCore
     rparen
     pure (.exists_ sel))
   -- Parameter
-  <|> (tryP parseParam)
+  <|> (attempt parseParam)
   -- Literal
-  <|> (tryP parseLiteral)
+  <|> (attempt parseLiteral)
   -- table.* or just *
-  <|> (tryP do
+  <|> (attempt do
     let tbl ← ident
     dot
     star
     pure (.tableStar tbl))
-  <|> (tryP do
+  <|> (attempt do
     star
     pure .star)
   -- Function call or column reference
-  <|> (tryP do
+  <|> (attempt do
     let name ← identOrKeyword
-    let hasParen ← optional lparen
+    let hasParen ← opt lparen
     match hasParen with
     | none =>
-      let qualified ← optional (dot *> ((star *> pure none) <|> (identOrKeyword >>= fun s => pure (some s))))
+      let qualified ← opt (dot *> ((star *> pure none) <|> (identOrKeyword >>= fun s => pure (some s))))
       match qualified with
       | some (some col) => pure (.qualified name col)
       | some none => pure (.tableStar name)
@@ -185,11 +207,11 @@ partial def parsePrimary : Parser Expr := do
 /-- Parse unary expression -/
 partial def parseUnary : Parser Expr := do
   skipWs
-  (tryP do
+  (attempt do
     let _ ← keyword "NOT"
     let e ← parseUnary
     pure (.unary .not e))
-  <|> (tryP do
+  <|> (attempt do
     let _ ← lexeme (char '-')
     let e ← parseUnary
     pure (.unary .neg e))
@@ -227,11 +249,11 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
 
   while true do
     skipWs
-    let s ← get
+    let s ← Sift.Parser.get
 
     -- Try OR
     if minPrec <= precOr then
-      let orOp ← optional (keyword "OR")
+      let orOp ← opt (keyword "OR")
       if orOp.isSome then
         let right ← parseExprPrec (precOr + 1)
         left := applyOp "OR" left right
@@ -239,7 +261,7 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
 
     -- Try AND
     if minPrec <= precAnd then
-      let andOp ← optional (keyword "AND")
+      let andOp ← opt (keyword "AND")
       if andOp.isSome then
         let right ← parseExprPrec (precAnd + 1)
         left := applyOp "AND" left right
@@ -248,10 +270,10 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
     -- Try comparison operators
     if minPrec <= precCompare then
       -- IS NOT NULL, IS NULL, IS NOT, IS
-      let isOp ← optional (keyword "IS")
+      let isOp ← opt (keyword "IS")
       if isOp.isSome then
-        let notOp ← optional (keyword "NOT")
-        let nullOp ← optional (keyword "NULL")
+        let notOp ← opt (keyword "NOT")
+        let nullOp ← opt (keyword "NULL")
         match notOp, nullOp with
         | some _, some _ =>
           left := applyOp "IS NOT NULL" left left
@@ -266,65 +288,65 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
         continue
 
       -- NOT IN, NOT LIKE, NOT BETWEEN, NOT GLOB
-      let notOp ← optional (keyword "NOT")
+      let notOp ← opt (keyword "NOT")
       if notOp.isSome then
-        let inOp ← optional (keyword "IN")
+        let inOp ← opt (keyword "IN")
         if inOp.isSome then
           lparen
-          let subq ← optional (tryP parseSelectCore)
+          let subq ← opt (attempt parseSelectCore)
           match subq with
           | some sel =>
             rparen
             left := .notInSubquery left sel
           | none =>
-            let values ← sepBy1 (parseExprPrec precOr) comma
+            let values ← sepBy1List (parseExprPrec precOr) comma
             rparen
             left := .notInValues left values
           continue
-        let likeOp ← optional (keyword "LIKE")
+        let likeOp ← opt (keyword "LIKE")
         if likeOp.isSome then
           let right ← parseExprPrec (precCompare + 1)
           left := applyOp "NOT LIKE" left right
           continue
-        let betweenOp ← optional (keyword "BETWEEN")
+        let betweenOp ← opt (keyword "BETWEEN")
         if betweenOp.isSome then
           let lower ← parseExprPrec precAddSub
           let _ ← keyword "AND"
           let upper ← parseExprPrec precAddSub
           left := .unary .not (.between left lower upper)
           continue
-        let globOp ← optional (keyword "GLOB")
+        let globOp ← opt (keyword "GLOB")
         if globOp.isSome then
           let right ← parseExprPrec (precCompare + 1)
           left := .unary .not (.binary .glob left right)
           continue
-        set s
+        Sift.Parser.set s
         break
 
       -- IN
-      let inOp ← optional (keyword "IN")
+      let inOp ← opt (keyword "IN")
       if inOp.isSome then
         lparen
-        let subq ← optional (tryP parseSelectCore)
+        let subq ← opt (attempt parseSelectCore)
         match subq with
         | some sel =>
           rparen
           left := .inSubquery left sel
         | none =>
-          let values ← sepBy1 (parseExprPrec precOr) comma
+          let values ← sepBy1List (parseExprPrec precOr) comma
           rparen
           left := .inValues left values
         continue
 
       -- LIKE
-      let likeOp ← optional (keyword "LIKE")
+      let likeOp ← opt (keyword "LIKE")
       if likeOp.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp "LIKE" left right
         continue
 
       -- BETWEEN
-      let betweenOp ← optional (keyword "BETWEEN")
+      let betweenOp ← opt (keyword "BETWEEN")
       if betweenOp.isSome then
         let lower ← parseExprPrec precAddSub
         let _ ← keyword "AND"
@@ -333,39 +355,39 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
         continue
 
       -- GLOB
-      let globOp ← optional (keyword "GLOB")
+      let globOp ← opt (keyword "GLOB")
       if globOp.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp "GLOB" left right
         continue
 
       -- <>, !=, <=, >=, <, >, =
-      let neq ← optional (symbol "<>" <|> symbol "!=")
+      let neq ← opt (symbol "<>" <|> symbol "!=")
       if neq.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp "<>" left right
         continue
-      let lte ← optional (symbol "<=")
+      let lte ← opt (symbol "<=")
       if lte.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp "<=" left right
         continue
-      let gte ← optional (symbol ">=")
+      let gte ← opt (symbol ">=")
       if gte.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp ">=" left right
         continue
-      let lt ← optional (symbol "<")
+      let lt ← opt (symbol "<")
       if lt.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp "<" left right
         continue
-      let gt ← optional (symbol ">")
+      let gt ← opt (symbol ">")
       if gt.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp ">" left right
         continue
-      let eq ← optional (symbol "=")
+      let eq ← opt (symbol "=")
       if eq.isSome then
         let right ← parseExprPrec (precCompare + 1)
         left := applyOp "=" left right
@@ -373,7 +395,7 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
 
     -- Concatenation ||
     if minPrec <= precConcat then
-      let concatOp ← optional (symbol "||")
+      let concatOp ← opt (symbol "||")
       if concatOp.isSome then
         let right ← parseExprPrec (precConcat + 1)
         left := applyOp "||" left right
@@ -381,12 +403,12 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
 
     -- Add/Sub
     if minPrec <= precAddSub then
-      let addOp ← optional (symbol "+")
+      let addOp ← opt (symbol "+")
       if addOp.isSome then
         let right ← parseExprPrec (precAddSub + 1)
         left := applyOp "+" left right
         continue
-      let subOp ← optional (symbol "-")
+      let subOp ← opt (symbol "-")
       if subOp.isSome then
         let right ← parseExprPrec (precAddSub + 1)
         left := applyOp "-" left right
@@ -394,17 +416,17 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
 
     -- Mul/Div/Mod
     if minPrec <= precMulDiv then
-      let mulOp ← optional (symbol "*")
+      let mulOp ← opt (symbol "*")
       if mulOp.isSome then
         let right ← parseExprPrec (precMulDiv + 1)
         left := applyOp "*" left right
         continue
-      let divOp ← optional (symbol "/")
+      let divOp ← opt (symbol "/")
       if divOp.isSome then
         let right ← parseExprPrec (precMulDiv + 1)
         left := applyOp "/" left right
         continue
-      let modOp ← optional (symbol "%")
+      let modOp ← opt (symbol "%")
       if modOp.isSome then
         let right ← parseExprPrec (precMulDiv + 1)
         left := applyOp "%" left right
@@ -418,7 +440,7 @@ partial def parseExprPrec (minPrec : Nat) : Parser Expr := do
 /-- Parse SELECT item -/
 partial def parseSelectItem : Parser SelectItem := do
   let expr ← parseExprPrec precOr
-  let alias_ ← optional (keyword "AS" *> ident <|> tryP ident)
+  let alias_ ← opt (keyword "AS" *> ident <|> attempt ident)
   pure (SelectItem.mk expr alias_)
 
 /-- Parse table reference -/
@@ -427,20 +449,20 @@ partial def parseTableRef : Parser TableRef := do
   parseJoins primary
 where
   parseTablePrimary : Parser TableRef := do
-    (tryP do
+    (attempt do
       lparen
       let sel ← parseSelectCore
       rparen
-      let alias_ ← optional (keyword "AS") *> ident
+      let alias_ ← opt (keyword "AS") *> ident
       pure (.subquery sel alias_))
     <|> do
       let name ← ident
-      let alias_ ← optional (optional (keyword "AS") *> ident)
+      let alias_ ← opt (optional (keyword "AS") *> ident)
       pure (.table name alias_)
 
   parseJoins (left : TableRef) : Parser TableRef := do
     skipWs
-    let joinType ← optional parseJoinType
+    let joinType ← opt parseJoinType
     match joinType with
     | none => pure left
     | some jt =>
@@ -452,13 +474,13 @@ where
       parseJoins (.join jt left right on)
 
   parseJoinType : Parser JoinType := do
-    let _ ← optional (keyword "NATURAL")
-    let left ← optional (keyword "LEFT")
-    let right ← optional (keyword "RIGHT")
-    let full ← optional (keyword "FULL")
-    let cross ← optional (keyword "CROSS")
-    let _ ← optional (keyword "INNER")
-    let _ ← optional (keyword "OUTER")
+    let _ ← opt (keyword "NATURAL")
+    let left ← opt (keyword "LEFT")
+    let right ← opt (keyword "RIGHT")
+    let full ← opt (keyword "FULL")
+    let cross ← opt (keyword "CROSS")
+    let _ ← opt (keyword "INNER")
+    let _ ← opt (keyword "OUTER")
     let _ ← keyword "JOIN"
     if cross.isSome then pure .cross
     else if left.isSome then pure .left
@@ -470,14 +492,14 @@ where
 partial def parseOrderItem : Parser OrderItem := do
   let expr ← parseExprPrec precOr
   let dir ← do
-    let desc ← optional (keyword "DESC")
+    let desc ← opt (keyword "DESC")
     if desc.isSome then pure SortDir.desc
     else do
-      let _ ← optional (keyword "ASC")
+      let _ ← opt (keyword "ASC")
       pure SortDir.asc
-  let nulls ← optional do
+  let nulls ← opt do
     let _ ← keyword "NULLS"
-    let first ← optional (keyword "FIRST")
+    let first ← opt (keyword "FIRST")
     if first.isSome then pure NullsOrder.first
     else do
       let _ ← keyword "LAST"
@@ -488,28 +510,28 @@ partial def parseOrderItem : Parser OrderItem := do
 partial def parseSelectCore : Parser SelectCore := do
   skipWs
   let _ ← keyword "SELECT"
-  let distinct ← optional (keyword "DISTINCT")
-  let _ ← optional (keyword "ALL")
+  let distinct ← opt (keyword "DISTINCT")
+  let _ ← opt (keyword "ALL")
   let first ← parseSelectItem
-  let rest ← many (comma *> parseSelectItem)
+  let rest ← manyList (comma *> parseSelectItem)
   let columns := first :: rest
-  let from_ ← optional (keyword "FROM" *> parseTableRef)
-  let where_ ← optional (keyword "WHERE" *> parseExprPrec precOr)
-  let groupBy ← optional do
+  let from_ ← opt (keyword "FROM" *> parseTableRef)
+  let where_ ← opt (keyword "WHERE" *> parseExprPrec precOr)
+  let groupBy ← opt do
     let _ ← keyword "GROUP"
     let _ ← keyword "BY"
     let first ← parseExprPrec precOr
-    let rest ← many (comma *> parseExprPrec precOr)
+    let rest ← manyList (comma *> parseExprPrec precOr)
     pure (first :: rest)
-  let having ← optional (keyword "HAVING" *> parseExprPrec precOr)
-  let orderBy ← optional do
+  let having ← opt (keyword "HAVING" *> parseExprPrec precOr)
+  let orderBy ← opt do
     let _ ← keyword "ORDER"
     let _ ← keyword "BY"
     let first ← parseOrderItem
-    let rest ← many (comma *> parseOrderItem)
+    let rest ← manyList (comma *> parseOrderItem)
     pure (first :: rest)
-  let limit ← optional (keyword "LIMIT" *> intLit)
-  let offset ← optional (keyword "OFFSET" *> intLit)
+  let limit ← opt (keyword "LIMIT" *> intLit)
+  let offset ← opt (keyword "OFFSET" *> intLit)
   pure (SelectCore.mk
     distinct.isSome
     columns
@@ -537,7 +559,7 @@ def parseSelect : Parser SelectCore := parseSelectCore
 def parseInsert : Parser InsertStmt := do
   skipWs
   let _ ← keyword "INSERT"
-  let onConflict ← optional do
+  let onConflict ← opt do
     let _ ← keyword "OR"
     (keyword "ABORT" *> pure ConflictAction.abort)
     <|> (keyword "ROLLBACK" *> pure .rollback)
@@ -546,23 +568,23 @@ def parseInsert : Parser InsertStmt := do
     <|> (keyword "REPLACE" *> pure .replace)
   let _ ← keyword "INTO"
   let table ← ident
-  let columns ← optional do
+  let columns ← opt do
     lparen
     let first ← ident
-    let rest ← many (comma *> ident)
+    let rest ← manyList (comma *> ident)
     rparen
     pure (first :: rest)
   let valuesOrSelect ← do
-    let valuesKw ← optional (keyword "VALUES")
+    let valuesKw ← opt (keyword "VALUES")
     if valuesKw.isSome then
       let parseRow := do
         lparen
         let first ← parseExpr
-        let rest ← many (comma *> parseExpr)
+        let rest ← manyList (comma *> parseExpr)
         rparen
         pure (first :: rest)
       let first ← parseRow
-      let rest ← many (comma *> parseRow)
+      let rest ← manyList (comma *> parseRow)
       pure (Sum.inl (first :: rest) : List (List Expr) ⊕ SelectCore)
     else
       let sel ← parseSelect
@@ -570,10 +592,10 @@ def parseInsert : Parser InsertStmt := do
   let (values, fromSelect) := match valuesOrSelect with
     | Sum.inl vs => (vs, none)
     | Sum.inr sel => ([], some sel)
-  let returning ← optional do
+  let returning ← opt do
     let _ ← keyword "RETURNING"
     let first ← parseSelectItem
-    let rest ← many (comma *> parseSelectItem)
+    let rest ← manyList (comma *> parseSelectItem)
     pure (first :: rest)
   pure {
     table
@@ -588,12 +610,12 @@ def parseInsert : Parser InsertStmt := do
 def parseUpdate : Parser UpdateStmt := do
   skipWs
   let _ ← keyword "UPDATE"
-  let _ ← optional do
+  let _ ← opt do
     let _ ← keyword "OR"
     keyword "ABORT" <|> keyword "ROLLBACK" <|> keyword "FAIL" <|>
     keyword "IGNORE" <|> keyword "REPLACE"
   let table ← ident
-  let alias_ ← optional (optional (keyword "AS") *> ident)
+  let alias_ ← opt (optional (keyword "AS") *> ident)
   let _ ← keyword "SET"
   let parseAssignment := do
     let column ← ident
@@ -601,13 +623,13 @@ def parseUpdate : Parser UpdateStmt := do
     let value ← parseExpr
     pure { column, value : Assignment }
   let first ← parseAssignment
-  let rest ← many (comma *> parseAssignment)
-  let from_ ← optional (keyword "FROM" *> parseTableRef)
-  let where_ ← optional (keyword "WHERE" *> parseExpr)
-  let returning ← optional do
+  let rest ← manyList (comma *> parseAssignment)
+  let from_ ← opt (keyword "FROM" *> parseTableRef)
+  let where_ ← opt (keyword "WHERE" *> parseExpr)
+  let returning ← opt do
     let _ ← keyword "RETURNING"
     let first ← parseSelectItem
-    let rest ← many (comma *> parseSelectItem)
+    let rest ← manyList (comma *> parseSelectItem)
     pure (first :: rest)
   pure {
     table
@@ -624,12 +646,12 @@ def parseDelete : Parser DeleteStmt := do
   let _ ← keyword "DELETE"
   let _ ← keyword "FROM"
   let table ← ident
-  let alias_ ← optional (optional (keyword "AS") *> ident)
-  let where_ ← optional (keyword "WHERE" *> parseExpr)
-  let returning ← optional do
+  let alias_ ← opt (optional (keyword "AS") *> ident)
+  let where_ ← opt (keyword "WHERE" *> parseExpr)
+  let returning ← opt do
     let _ ← keyword "RETURNING"
     let first ← parseSelectItem
-    let rest ← many (comma *> parseSelectItem)
+    let rest ← manyList (comma *> parseSelectItem)
     pure (first :: rest)
   pure {
     table
@@ -659,17 +681,17 @@ def parseColumnType : Parser ColumnType := do
   else if upper == "DATETIME" || upper == "TIMESTAMP" then
     pure .datetime
   else if upper == "NUMERIC" || upper == "DECIMAL" then
-    let params ← optional do
+    let params ← opt do
       lparen
       let p ← intLit
-      let s ← optional (comma *> intLit)
+      let s ← opt (comma *> intLit)
       rparen
       pure (p.toNat, s.map Int.toNat)
     match params with
     | some (p, s) => pure (.numeric (some p) s)
     | none => pure (.numeric none none)
   else if upper == "VARCHAR" || upper == "CHAR" then
-    let len ← optional (lparen *> intLit <* rparen)
+    let len ← opt (lparen *> intLit <* rparen)
     pure (.varchar (len.map Int.toNat))
   else
     pure (.custom typeName)
@@ -687,7 +709,7 @@ def parseColumnConstraint : Parser ColumnConstraint := do
   (do
     let _ ← keyword "PRIMARY"
     let _ ← keyword "KEY"
-    let autoInc ← optional (keyword "AUTOINCREMENT")
+    let autoInc ← opt (keyword "AUTOINCREMENT")
     pure (.primaryKey autoInc.isSome))
   <|> (keyword "NOT" *> keyword "NULL" *> pure .notNull)
   <|> (keyword "UNIQUE" *> pure .unique)
@@ -707,8 +729,8 @@ def parseColumnConstraint : Parser ColumnConstraint := do
     lparen
     let column ← ident
     rparen
-    let onDelete ← optional (keyword "ON" *> keyword "DELETE" *> parseFKAction)
-    let onUpdate ← optional (keyword "ON" *> keyword "UPDATE" *> parseFKAction)
+    let onDelete ← opt (keyword "ON" *> keyword "DELETE" *> parseFKAction)
+    let onUpdate ← opt (keyword "ON" *> keyword "UPDATE" *> parseFKAction)
     pure (.references table column onDelete onUpdate))
   <|> (do
     let _ ← keyword "COLLATE"
@@ -719,25 +741,25 @@ def parseColumnConstraint : Parser ColumnConstraint := do
 def parseColumnDef : Parser ColumnDef := do
   let name ← ident
   let type ← parseColumnType
-  let constraints ← many parseColumnConstraint
+  let constraints ← manyList parseColumnConstraint
   pure { name, type, constraints }
 
 /-- Parse table constraint -/
 def parseTableConstraint : Parser TableConstraint := do
-  let _ ← optional (keyword "CONSTRAINT" *> ident)
+  let _ ← opt (keyword "CONSTRAINT" *> ident)
   (do
     let _ ← keyword "PRIMARY"
     let _ ← keyword "KEY"
     lparen
     let first ← ident
-    let rest ← many (comma *> ident)
+    let rest ← manyList (comma *> ident)
     rparen
     pure (.primaryKey (first :: rest)))
   <|> (do
     let _ ← keyword "UNIQUE"
     lparen
     let first ← ident
-    let rest ← many (comma *> ident)
+    let rest ← manyList (comma *> ident)
     rparen
     pure (.unique (first :: rest)))
   <|> (do
@@ -751,33 +773,33 @@ def parseTableConstraint : Parser TableConstraint := do
     let _ ← keyword "KEY"
     lparen
     let first ← ident
-    let rest ← many (comma *> ident)
+    let rest ← manyList (comma *> ident)
     rparen
     let _ ← keyword "REFERENCES"
     let refTable ← ident
     lparen
     let refFirst ← ident
-    let refRest ← many (comma *> ident)
+    let refRest ← manyList (comma *> ident)
     rparen
-    let onDelete ← optional (keyword "ON" *> keyword "DELETE" *> parseFKAction)
-    let onUpdate ← optional (keyword "ON" *> keyword "UPDATE" *> parseFKAction)
+    let onDelete ← opt (keyword "ON" *> keyword "DELETE" *> parseFKAction)
+    let onUpdate ← opt (keyword "ON" *> keyword "UPDATE" *> parseFKAction)
     pure (.foreignKey (first :: rest) refTable (refFirst :: refRest) onDelete onUpdate))
 
 /-- Parse CREATE TABLE statement -/
 def parseCreateTable : Parser CreateTableStmt := do
   skipWs
   let _ ← keyword "CREATE"
-  let temporary ← optional (keyword "TEMPORARY" <|> keyword "TEMP")
+  let temporary ← opt (keyword "TEMPORARY" <|> keyword "TEMP")
   let _ ← keyword "TABLE"
-  let ifNotExists ← optional (keyword "IF" *> keyword "NOT" *> keyword "EXISTS")
+  let ifNotExists ← opt (keyword "IF" *> keyword "NOT" *> keyword "EXISTS")
   let name ← ident
   lparen
   let firstCol ← parseColumnDef
   let restItems ← many (comma *> (
-    tryP (parseTableConstraint >>= fun c => pure (Sum.inr c : ColumnDef ⊕ TableConstraint))
+    attempt (parseTableConstraint >>= fun c => pure (Sum.inr c : ColumnDef ⊕ TableConstraint))
     <|> (parseColumnDef >>= fun c => pure (Sum.inl c : ColumnDef ⊕ TableConstraint))))
   rparen
-  let strict ← optional (keyword "STRICT")
+  let strict ← opt (keyword "STRICT")
   let mut columns := [firstCol]
   let mut constraints := []
   for item in restItems do
@@ -802,17 +824,17 @@ def parseAlterTable : Parser AlterTableStmt := do
   let parseOp :=
     (do
       let _ ← keyword "ADD"
-      let _ ← optional (keyword "COLUMN")
+      let _ ← opt (keyword "COLUMN")
       let col ← parseColumnDef
       pure (AlterOp.addColumn col))
     <|> (do
       let _ ← keyword "DROP"
-      let _ ← optional (keyword "COLUMN")
+      let _ ← opt (keyword "COLUMN")
       let name ← ident
       pure (.dropColumn name))
     <|> (do
       let _ ← keyword "RENAME"
-      let _ ← optional (keyword "COLUMN")
+      let _ ← opt (keyword "COLUMN")
       let oldName ← ident
       let _ ← keyword "TO"
       let newName ← ident
@@ -823,7 +845,7 @@ def parseAlterTable : Parser AlterTableStmt := do
       let newName ← ident
       pure (.renameTable newName))
   let first ← parseOp
-  let rest ← many (comma *> parseOp)
+  let rest ← manyList (comma *> parseOp)
   pure { table, operations := first :: rest }
 
 /-- Parse DROP TABLE statement -/
@@ -831,7 +853,7 @@ def parseDropTable : Parser DropTableStmt := do
   skipWs
   let _ ← keyword "DROP"
   let _ ← keyword "TABLE"
-  let ifExists ← optional (keyword "IF" *> keyword "EXISTS")
+  let ifExists ← opt (keyword "IF" *> keyword "EXISTS")
   let table ← ident
   pure { table, ifExists := ifExists.isSome }
 
@@ -839,9 +861,9 @@ def parseDropTable : Parser DropTableStmt := do
 def parseCreateIndex : Parser CreateIndexStmt := do
   skipWs
   let _ ← keyword "CREATE"
-  let unique ← optional (keyword "UNIQUE")
+  let unique ← opt (keyword "UNIQUE")
   let _ ← keyword "INDEX"
-  let ifNotExists ← optional (keyword "IF" *> keyword "NOT" *> keyword "EXISTS")
+  let ifNotExists ← opt (keyword "IF" *> keyword "NOT" *> keyword "EXISTS")
   let name ← ident
   let _ ← keyword "ON"
   let table ← ident
@@ -849,17 +871,17 @@ def parseCreateIndex : Parser CreateIndexStmt := do
   let parseCol := do
     let name ← ident
     let dir ← do
-      let desc ← optional (keyword "DESC")
+      let desc ← opt (keyword "DESC")
       if desc.isSome then pure (some SortDir.desc)
       else do
-        let asc ← optional (keyword "ASC")
+        let asc ← opt (keyword "ASC")
         if asc.isSome then pure (some SortDir.asc)
         else pure none
     pure (name, dir)
   let first ← parseCol
-  let rest ← many (comma *> parseCol)
+  let rest ← manyList (comma *> parseCol)
   rparen
-  let where_ ← optional (keyword "WHERE" *> parseExpr)
+  let where_ ← opt (keyword "WHERE" *> parseExpr)
   pure {
     name
     table
@@ -874,7 +896,7 @@ def parseDropIndex : Parser DropIndexStmt := do
   skipWs
   let _ ← keyword "DROP"
   let _ ← keyword "INDEX"
-  let ifExists ← optional (keyword "IF" *> keyword "EXISTS")
+  let ifExists ← opt (keyword "IF" *> keyword "EXISTS")
   let name ← ident
   pure { name, ifExists := ifExists.isSome }
 
@@ -898,15 +920,15 @@ inductive Statement where
 /-- Parse any SQL statement -/
 def parseStatement : Parser Statement := do
   skipWs
-  (tryP (parseSelect >>= fun s => pure (.select s)))
-  <|> (tryP (parseInsert >>= fun s => pure (.insert s)))
-  <|> (tryP (parseUpdate >>= fun s => pure (.update s)))
-  <|> (tryP (parseDelete >>= fun s => pure (.delete s)))
-  <|> (tryP (parseCreateTable >>= fun s => pure (.createTable s)))
-  <|> (tryP (parseCreateIndex >>= fun s => pure (.createIndex s)))
-  <|> (tryP (parseDropTable >>= fun s => pure (.dropTable s)))
-  <|> (tryP (parseDropIndex >>= fun s => pure (.dropIndex s)))
-  <|> (tryP (parseAlterTable >>= fun s => pure (.alterTable s)))
+  (attempt (parseSelect >>= fun s => pure (.select s)))
+  <|> (attempt (parseInsert >>= fun s => pure (.insert s)))
+  <|> (attempt (parseUpdate >>= fun s => pure (.update s)))
+  <|> (attempt (parseDelete >>= fun s => pure (.delete s)))
+  <|> (attempt (parseCreateTable >>= fun s => pure (.createTable s)))
+  <|> (attempt (parseCreateIndex >>= fun s => pure (.createIndex s)))
+  <|> (attempt (parseDropTable >>= fun s => pure (.dropTable s)))
+  <|> (attempt (parseDropIndex >>= fun s => pure (.dropIndex s)))
+  <|> (attempt (parseAlterTable >>= fun s => pure (.alterTable s)))
 
 /-!
 ## Public API

@@ -1,12 +1,15 @@
 /-
   Chisel.Parser.Lexer
-  SQL tokenization utilities
+  SQL tokenization utilities (using Sift parser combinators)
 -/
-import Chisel.Parser.Core
+import Sift
 
 namespace Chisel.Parser
 
-open Parser in
+open Sift
+
+/-- Parser type for SQL parsing (no user state needed) -/
+abbrev Parser (α : Type) := Sift.Parser Unit α
 
 /-- SQL reserved keywords -/
 def sqlKeywords : List String := [
@@ -36,41 +39,42 @@ def isKeyword (s : String) : Bool :=
 
 namespace Lexer
 
-open Parser
-
 /-- Skip whitespace and SQL comments -/
 partial def skipWs : Parser Unit := do
-  skipMany space
-  let hasComment ← (do
-    let s ← get
-    let rem := s.remaining
-    pure (rem.startsWith "--" || rem.startsWith "/*"))
-  if hasComment then
+  skipMany (satisfy fun c => c == ' ' || c == '\t' || c == '\n' || c == '\r')
+  let atComment ← checkComment
+  if atComment then
     skipComment
     skipWs
   else
     pure ()
 where
+  checkComment : Parser Bool := do
+    let p ← peekString 2
+    match p with
+    | some s => pure (s == "--" || s == "/*")
+    | none => pure false
+
   skipComment : Parser Unit := do
-    let s ← get
-    let rem := s.remaining
-    if rem.startsWith "--" then
-      skipMany (satisfy (· != '\n') "")
-      let _ ← optional (char '\n')
-    else if rem.startsWith "/*" then
+    let p ← peekString 2
+    match p with
+    | some "--" =>
+      let _ ← string "--"
+      skipWhile (· != '\n')
+      let _ ← Sift.optional (char '\n')
+    | some "/*" =>
       let _ ← string "/*"
       skipUntilEnd
-    else
-      pure ()
+    | _ => pure ()
+
   skipUntilEnd : Parser Unit := do
-    let s ← get
-    if s.remaining.startsWith "*/" then
-      let _ ← string "*/"
-    else if s.atEnd then
-      pure ()
-    else
+    let p ← peekString 2
+    match p with
+    | some "*/" => let _ ← string "*/"
+    | some _ =>
       let _ ← anyChar
       skipUntilEnd
+    | none => pure ()  -- EOF in comment
 
 /-- Lexer combinator: parse with surrounding whitespace -/
 def lexeme (p : Parser α) : Parser α := do
@@ -80,75 +84,83 @@ def lexeme (p : Parser α) : Parser α := do
 
 /-- Parse a symbol (punctuation) -/
 def symbol (s : String) : Parser String :=
-  lexeme (string s)
+  lexeme (attempt (string s))
 
-/-- Parse a keyword (case-insensitive, must not be followed by alphanumeric) -/
-def keyword (kw : String) : Parser String := lexeme do
+/-- Parse a keyword (case-insensitive, must not be followed by alphanumeric or underscore) -/
+def keyword (kw : String) : Parser String := lexeme (attempt do
   let matched ← stringCI kw
-  notFollowedBy alphaNum <|> notFollowedBy (char '_')
-  pure matched
-
-/-- Convert char list to string -/
-private def charsToString (cs : List Char) : String :=
-  cs.foldl (fun s c => s.push c) ""
+  let next ← peek
+  match next with
+  | some c =>
+    if c.isAlphanum || c == '_' then
+      Sift.Parser.fail s!"expected keyword boundary after '{kw}'"
+    else
+      pure matched
+  | none => pure matched)
 
 /-- Parse unquoted identifier -/
 def identRaw : Parser String := do
-  let first ← letter <|> char '_'
-  let rest ← many (alphaNum <|> char '_')
-  pure (charsToString (first :: rest))
+  let first ← satisfy (fun c => c.isAlpha || c == '_')
+  let rest ← takeWhile (fun c => c.isAlphanum || c == '_')
+  pure (first.toString ++ rest)
 
 /-- Parse double-quoted identifier "name" -/
 def quotedIdent : Parser String := do
   let _ ← char '"'
-  let chars ← many (satisfy (· != '"') "")
+  let content ← takeWhile (· != '"')
   let _ ← char '"'
-  pure (charsToString chars)
+  pure content
 
 /-- Parse backtick-quoted identifier `name` -/
 def backtickIdent : Parser String := do
   let _ ← char '`'
-  let chars ← many (satisfy (· != '`') "")
+  let content ← takeWhile (· != '`')
   let _ ← char '`'
-  pure (charsToString chars)
+  pure content
 
 /-- Parse square-bracket quoted identifier [name] -/
 def bracketIdent : Parser String := do
   let _ ← char '['
-  let chars ← many (satisfy (· != ']') "")
+  let content ← takeWhile (· != ']')
   let _ ← char ']'
-  pure (charsToString chars)
+  pure content
 
 /-- Parse identifier (not a keyword) -/
 def ident : Parser String := lexeme do
-  quotedIdent <|> backtickIdent <|> bracketIdent <|> do
+  (attempt quotedIdent) <|>
+  (attempt backtickIdent) <|>
+  (attempt bracketIdent) <|>
+  (attempt do
     let name ← identRaw
     if isKeyword name then
-      fail s!"identifier (got keyword \"{name}\")"
+      Sift.Parser.fail s!"identifier (got keyword \"{name}\")"
     else
-      pure name
+      pure name)
 
 /-- Parse identifier or keyword as identifier -/
 def identOrKeyword : Parser String := lexeme do
-  quotedIdent <|> backtickIdent <|> bracketIdent <|> identRaw
+  (attempt quotedIdent) <|>
+  (attempt backtickIdent) <|>
+  (attempt bracketIdent) <|>
+  identRaw
+
+/-- Convert digit chars to Nat -/
+private def digitsToNat (ds : String) : Nat :=
+  ds.foldl (fun acc d => acc * 10 + (d.toNat - '0'.toNat)) 0
 
 /-- Parse integer literal -/
 def intLit : Parser Int := lexeme do
-  let neg ← optional (char '-')
-  let digits ← many1 digit
-  let n := digits.foldl (fun acc d => acc * 10 + (d.toNat - '0'.toNat)) 0
+  let neg ← Sift.optional (char '-')
+  let digits ← takeWhile1 Char.isDigit
+  let n := digitsToNat digits
   pure (match neg with | some _ => -n | none => n)
-
-/-- Convert digit chars to Nat -/
-private def digitsToNat (ds : List Char) : Nat :=
-  ds.foldl (fun acc d => acc * 10 + (d.toNat - '0'.toNat)) 0
 
 /-- Parse float literal -/
 def floatLit : Parser Float := lexeme do
-  let neg ← optional (char '-')
-  let intPart ← many1 digit
+  let neg ← Sift.optional (char '-')
+  let intPart ← takeWhile1 Char.isDigit
   let _ ← char '.'
-  let fracPart ← many1 digit
+  let fracPart ← takeWhile1 Char.isDigit
   let intVal := digitsToNat intPart
   let fracVal := digitsToNat fracPart
   let fracLen := fracPart.length
@@ -158,9 +170,9 @@ def floatLit : Parser Float := lexeme do
 
 /-- Parse number (int or float) -/
 def number : Parser (Int ⊕ Float) := lexeme do
-  let neg ← optional (char '-')
-  let intPart ← many1 digit
-  let fracOpt ← optional (char '.' *> many1 digit)
+  let neg ← Sift.optional (char '-')
+  let intPart ← takeWhile1 Char.isDigit
+  let fracOpt ← Sift.optional (char '.' *> takeWhile1 Char.isDigit)
   match fracOpt with
   | some fracPart =>
     let intVal := digitsToNat intPart
@@ -176,27 +188,26 @@ def number : Parser (Int ⊕ Float) := lexeme do
 /-- Parse string literal 'text' with '' escape -/
 partial def stringLit : Parser String := lexeme do
   let _ ← char '\''
-  let chars ← parseContent []
-  pure (charsToString chars.reverse)
+  let chars ← parseContent ""
+  pure chars
 where
-  parseContent (acc : List Char) : Parser (List Char) := do
+  parseContent (acc : String) : Parser String := do
     let c ← anyChar
     if c == '\'' then
-      let next ← optional (char '\'')
+      let next ← Sift.optional (char '\'')
       match next with
-      | some _ => parseContent ('\'' :: acc)
+      | some _ => parseContent (acc.push '\'')
       | none => pure acc
     else
-      parseContent (c :: acc)
+      parseContent (acc.push c)
 
 /-- Parse blob literal X'hex' -/
 def blobLit : Parser ByteArray := lexeme do
-  let _ ← char 'X' <|> char 'x'
+  let _ ← satisfy (fun c => c == 'X' || c == 'x')
   let _ ← char '\''
-  let hexChars ← many (satisfy (fun c => c.isDigit || "abcdefABCDEF".any (· == c)) "hex digit")
+  let hexChars ← takeWhile (fun c => c.isDigit || "abcdefABCDEF".any (· == c))
   let _ ← char '\''
-  let hexStr := charsToString hexChars
-  pure (hexToBytes hexStr)
+  pure (hexToBytes hexChars)
 where
   hexToBytes (s : String) : ByteArray :=
     let chars := s.toList
@@ -211,7 +222,6 @@ where
     let n1 := hexDigit c1
     let n2 := hexDigit c2
     (n1 * 16 + n2).toUInt8
-  -- TODO: Replace with Staple.Hex.hexCharToNat after staple release
   hexDigit (c : Char) : Nat :=
     if c.isDigit then c.toNat - '0'.toNat
     else if c >= 'a' && c <= 'f' then c.toNat - 'a'.toNat + 10
@@ -238,7 +248,8 @@ def positionalParam : Parser Unit := do
 /-- Parse indexed parameter $N -/
 def indexedParam : Parser Nat := lexeme do
   let _ ← char '$'
-  nat
+  let digits ← takeWhile1 Char.isDigit
+  pure (digitsToNat digits)
 
 /-- Parse named parameter :name -/
 def colonParam : Parser String := lexeme do
