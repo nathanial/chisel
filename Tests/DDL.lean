@@ -182,6 +182,4 @@ test "drop index if exists" := do
   let stmt := dropIndex "idx_test" true
   renderDropIndex {} stmt ≡ "DROP INDEX IF EXISTS idx_test"
 
-#generate_tests
-
 end Tests.DDL

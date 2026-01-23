@@ -116,6 +116,4 @@ test "delete with returning" := do
   let sql := renderDelete {} stmt
   ensure (String.containsSubstr sql "RETURNING *") "should have RETURNING"
 
-#generate_tests
-
 end Tests.DML

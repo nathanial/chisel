@@ -336,5 +336,3 @@ test "missing named parameter fails" := do
     | .ok _ => throw <| IO.userError "should have failed"
     | .error _ => pure ()
   | .error e => throw <| IO.userError s!"parse error: {e}"
-
-#generate_tests

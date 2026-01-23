@@ -106,6 +106,4 @@ test "named parameter with colon style" := do
 test "raw SQL passes through" := do
   renderExpr {} (raw "CUSTOM_FUNC()") ≡ "CUSTOM_FUNC()"
 
-#generate_tests
-
 end Tests.Expr

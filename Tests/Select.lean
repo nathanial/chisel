@@ -142,6 +142,4 @@ test "complex select query" := do
   ensure (String.containsSubstr sql "ORDER BY") "should have ORDER BY"
   ensure (String.containsSubstr sql "LIMIT") "should have LIMIT"
 
-#generate_tests
-
 end Tests.Select

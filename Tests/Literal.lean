@@ -40,6 +40,4 @@ test "blob renders as hex" := do
   let bytes := ByteArray.mk #[0xDE, 0xAD, 0xBE, 0xEF]
   (Literal.blob bytes).render ≡ "X'DEADBEEF'"
 
-#generate_tests
-
 end Tests.Literal
